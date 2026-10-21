@@ -3,9 +3,66 @@ const $=id=>document.getElementById(id);let db,photos=[],stream=null,signId=null
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>globalThis.crypto?.randomUUID?.()||String(Date.now())+'-'+Math.random().toString(36).slice(2);
 function request(r){return new Promise((ok,fail)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>fail(r.error)})}
-function openDb(){return new Promise((ok,fail)=>{const r=indexedDB.open('nastec-coletas-piloto-04',1);r.onupgradeneeded=()=>r.result.createObjectStore('registros',{keyPath:'id'});r.onsuccess=()=>ok(r.result);r.onerror=()=>fail(r.error)})}
+function openDb(){return new Promise((ok,fail)=>{const r=indexedDB.open('nastec-coletas-piloto-04',2);r.onupgradeneeded=()=>{
+ const d=r.result;
+ if(!d.objectStoreNames.contains('registros'))d.createObjectStore('registros',{keyPath:'id'});
+ if(!d.objectStoreNames.contains('frascosPlanejados'))d.createObjectStore('frascosPlanejados',{keyPath:'bottle_code'});
+};r.onsuccess=()=>ok(r.result);r.onerror=()=>fail(r.error)})}
 const store=(mode='readonly')=>db.transaction('registros',mode).objectStore('registros');
 const all=()=>request(store().getAll());const get=id=>request(store().get(id));const put=r=>request(store('readwrite').put(r));const del=id=>request(store('readwrite').delete(id));
+const planStore=(mode='readonly')=>db.transaction('frascosPlanejados',mode).objectStore('frascosPlanejados');
+const plannedAll=()=>request(planStore().getAll());
+const plannedGet=code=>request(planStore().get(code));
+let identifiedCode=null;
+function setLookupMessage(msg,good=false){$('lookupStatus').textContent=msg;$('lookupStatus').className=good?'ok':'notice'}
+async function identifyBottle(code){
+ code=String(code||'').trim();
+ identifiedCode=null;
+ if(!code){setLookupMessage('Leia um QR Code ou informe o código do frasco.');return false}
+ const bottle=await plannedGet(code);
+ if(!bottle){setLookupMessage('FRASCO NÃO ENCONTRADO nas OS de teste carregadas neste aparelho. Não é permitido associá-lo manualmente.');return false}
+ const selected=$('form').elements.coletor.value;
+ if(selected&&selected!==bottle.collector){setLookupMessage('Frasco atribuído a outro coletor: '+bottle.collector+'. Selecione o coletor correto.');return false}
+ $('form').elements.coletor.value=bottle.collector;
+ for(const [key,val] of [['os',bottle.os_no],['amostra',bottle.sample_code],['ponto',bottle.point_name],['frasco',bottle.bottle_code]])$('form').elements[key].value=val;
+ identifiedCode=code;
+ setLookupMessage('Identificado: '+bottle.os_no+' • '+bottle.sample_code+' • '+bottle.bottle_type+' • '+bottle.point_name+' • '+bottle.collector,true);
+ return true
+}
+async function refreshPlans(){
+ const rows=await plannedAll();
+ const byOs={};
+ for(const b of rows)(byOs[b.os_no]??=[]).push(b);
+ $('planStatus').textContent=rows.length+' frasco(s) de teste carregado(s), em '+Object.keys(byOs).length+' OS. Disponíveis offline neste aparelho.';
+ $('planList').innerHTML=Object.entries(byOs).map(([os,items])=>'<div class="entry"><strong>'+esc(os)+'</strong> • '+esc(items[0].collector)+'<div class="muted">'+items.map(b=>esc(b.bottle_code)+' ('+esc(b.bottle_type)+')').join(' • ')+'</div></div>').join('')||'<p>Nenhuma OS de teste importada.</p>';
+}
+$('planFile').addEventListener('change',async e=>{
+ const file=e.target.files?.[0];if(!file)return;
+ try{
+  if(file.size>1000000)throw Error('Arquivo de teste excede 1 MB.');
+  const data=JSON.parse(await file.text());
+  if(data.formato!=='NASTEC-OS-PILOTO-06'||!Array.isArray(data.frascos)||!data.frascos.length||data.frascos.length>500)throw Error('Formato de OS de teste inválido.');
+  const keys=['os_no','sample_code','bottle_code','bottle_type','point_name','collector'];
+  const seen=new Set();
+  for(const b of data.frascos){
+   if(!b||keys.some(k=>typeof b[k]!=='string'||!b[k].trim()||b[k].length>200))throw Error('Frasco com campos ausentes ou inválidos.');
+   if(seen.has(b.bottle_code))throw Error('Código de frasco duplicado: '+b.bottle_code);
+   seen.add(b.bottle_code);
+   if(!['Jóice Fuhrmann','Alessandro Tinel'].includes(b.collector))throw Error('Coletor não previsto no piloto.');
+  }
+  const tx=db.transaction('frascosPlanejados','readwrite');
+  const st=tx.objectStore('frascosPlanejados');
+  // Replace only the test OS cache; existing field collection records remain untouched.
+  st.clear();
+  data.frascos.forEach(b=>st.put(Object.fromEntries(keys.map(k=>[k,b[k].trim()]))));
+  await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error);tx.onabort=()=>fail(tx.error)});
+  identifiedCode=null;await refreshPlans();setLookupMessage('OS fictícias importadas. Agora leia um QR Code de teste.');
+  alert('OS fictícias carregadas somente neste aparelho. Nenhum dado foi enviado ao LIMS.');
+ }catch(err){alert('Não foi possível importar: '+err.message)}
+ e.target.value='';
+});
+$('lookupBtn').addEventListener('click',()=>identifyBottle($('frasco').value));
+$('frasco').addEventListener('input',()=>{identifiedCode=null;setLookupMessage('Código alterado. Clique em Identificar frasco para conferir.')});
 const readFile=f=>new Promise((ok,fail)=>{const r=new FileReader();r.onload=()=>ok({name:f.name,type:f.type,data:r.result});r.onerror=()=>fail(r.error);r.readAsDataURL(f)});
 function history(r,action,detail=''){r.historico??=[];r.historico.push({acao:action,detalhe:detail,em:new Date().toISOString(),usuario:r.coletor})}
 const fields=['coletor','os','amostra','frasco','ponto','datahora','ph','cloro','temperatura','clima','observacoes'];
@@ -40,6 +97,13 @@ $('form').addEventListener('submit',async e=>{
  e.preventDefault();
  const f=Object.fromEntries(new FormData(e.target));
  const rows=await all();
+ if(!editId){
+  const b=await plannedGet(f.frasco.trim());
+  if(!b||['os','amostra','frasco','ponto'].some((k)=>f[k]!==({os:b.os_no,amostra:b.sample_code,frasco:b.bottle_code,ponto:b.point_name}[k]))||f.coletor!==b.collector){
+   alert('Identifique um frasco das OS fictícias importadas. Não é permitido salvar vínculos divergentes.');return
+  }
+  if(rows.some(r=>r.frasco===f.frasco)){alert('Este frasco já possui uma coleta registrada neste aparelho. Abra o registro existente.');return}
+ }
  if(rows.some(r=>r.id!==editId&&r.os===f.os&&r.coletor!==f.coletor)){alert('Esta OS já foi atribuída a outro coletor neste aparelho.');return}
  try{
   if(editId){
@@ -79,7 +143,7 @@ function makePrint(r){
  $('printArea').innerHTML=`<div class="sheet"><h2>NASTEC — FICHA DE COLETA (SIMULAÇÃO)</h2><p><strong>DOCUMENTO DE TESTE — NÃO UTILIZAR EM ATENDIMENTO REAL</strong></p><table>${fieldsPrint.map(([k,v])=>`<tr><th>${esc(k)}</th><td>${esc(v||'-')}</td></tr>`).join('')}</table><div class="print-block"><h3>Fotografias</h3><div class="print-photos">${fotos||'<p>Sem fotografias</p>'}</div></div><div class="print-block"><h3>Assinatura do coletor</h3>${r.assinatura?`<img class="signature" src="${r.assinatura}" alt="Assinatura">`:'<p>Coleta não finalizada / sem assinatura atual</p>'}<div>${esc(r.coletor)} • ${esc(r.finalizadoEm||'')}</div></div><div class="print-history"><h3>Histórico de alterações</h3>${historico}</div></div>`;
  window.print();
 }
-$('export').addEventListener('click',async()=>{const rows=await all();if(!rows.length){alert('Não há registros');return}const blob=new Blob([JSON.stringify({formato:'NASTEC-COLETAS-PILOTO-05',exportadoEm:new Date().toISOString(),registros:rows},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nastec-coletas-05-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)});
+$('export').addEventListener('click',async()=>{const rows=await all();if(!rows.length){alert('Não há registros');return}const blob=new Blob([JSON.stringify({formato:'NASTEC-COLETAS-PILOTO-06',exportadoEm:new Date().toISOString(),registros:rows},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nastec-coletas-06-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)});
 function stopCamera(){
  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
  const v=$('video');v.pause();v.srcObject=null;v.classList.add('hide');$('stopScan').classList.add('hide');
@@ -97,7 +161,7 @@ $('scan').addEventListener('click',async()=>{
   const loop=async()=>{
    if(!stream)return;
    const codes=await detector.detect(v).catch(()=>[]);
-   if(codes.length){$('frasco').value=codes[0].rawValue;stopCamera();$('scanStatus').textContent='Código lido: '+codes[0].rawValue}
+   if(codes.length){const code=codes[0].rawValue;stopCamera();$('frasco').value=code;await identifyBottle(code);$('scanStatus').textContent='Código lido: '+code}
    else setTimeout(loop,450)
   };loop()
  }catch(err){stopCamera();$('scanStatus').textContent='Câmera indisponível: '+err.message}
@@ -109,7 +173,7 @@ $('qrImage').addEventListener('change',async e=>{
   const detector=new BarcodeDetector({formats:['qr_code']});
   const bitmap=await createImageBitmap(file);
   const found=await detector.detect(bitmap);bitmap.close?.();
-  if(found.length){$('frasco').value=found[0].rawValue;$('scanStatus').textContent='Código lido da imagem.'}
+  if(found.length){const code=found[0].rawValue;$('frasco').value=code;await identifyBottle(code);$('scanStatus').textContent='Código lido da imagem.'}
   else $('scanStatus').textContent='Nenhum QR Code reconhecido nesta imagem. Digite o código.'
  }catch(err){$('scanStatus').textContent='Não foi possível analisar a imagem: '+err.message}
 });
@@ -125,4 +189,4 @@ function installationStatus(){
 }
 installationStatus();
 window.addEventListener('online',()=>db&&render());window.addEventListener('offline',()=>db&&render());
-(async()=>{try{db=await openDb();await render()}catch(e){$('status').textContent='Erro de armazenamento: '+e.message;$('form').querySelector('[type=submit]').disabled=true}if('serviceWorker'in navigator&&window.isSecureContext)navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(e=>{$('installStatus').textContent='Falha ao preparar modo offline: '+e.message})})();
+(async()=>{try{db=await openDb();await render();await refreshPlans()}catch(e){$('status').textContent='Erro de armazenamento: '+e.message;$('form').querySelector('[type=submit]').disabled=true}if('serviceWorker'in navigator&&window.isSecureContext)navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(e=>{$('installStatus').textContent='Falha ao preparar modo offline: '+e.message})})();

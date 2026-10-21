@@ -1,0 +1,30 @@
+{
+  "formato": "NASTEC-OS-PILOTO-06",
+  "observacao": "Dados 100% fictícios para teste de QR e associação offline.",
+  "frascos": [
+    {
+      "os_no": "OS-TESTE-006",
+      "sample_code": "AM-TESTE-006",
+      "bottle_code": "FRASCO-TESTE-001",
+      "bottle_type": "Físico-químico",
+      "point_name": "Reservatório superior — TESTE",
+      "collector": "Jóice Fuhrmann"
+    },
+    {
+      "os_no": "OS-TESTE-006",
+      "sample_code": "AM-TESTE-006",
+      "bottle_code": "FRASCO-TESTE-002",
+      "bottle_type": "Microbiológico",
+      "point_name": "Reservatório superior — TESTE",
+      "collector": "Jóice Fuhrmann"
+    },
+    {
+      "os_no": "OS-TESTE-007",
+      "sample_code": "AM-TESTE-007",
+      "bottle_code": "FRASCO-TESTE-003",
+      "bottle_type": "Físico-químico",
+      "point_name": "Torneira de teste",
+      "collector": "Alessandro Tinel"
+    }
+  ]
+}
