@@ -20,7 +20,7 @@ async function identifyBottle(code){
  identifiedCode=null;
  if(!code){setLookupMessage('Leia um QR Code ou informe o código do frasco.');return false}
  const bottle=await plannedGet(code);
- if(!bottle){setLookupMessage('FRASCO NÃO ENCONTRADO nas OS de teste carregadas neste aparelho. Não é permitido associá-lo manualmente.');return false}
+ if(!bottle){setLookupMessage('Frasco não encontrado nas OS oficiais carregadas. Atualize as OS antes de coletar.');return false}
  const selected=$('form').elements.coletor.value;
  if(selected&&selected!==bottle.collector){setLookupMessage('Frasco atribuído a outro coletor: '+bottle.collector+'. Selecione o coletor correto.');return false}
  $('form').elements.coletor.value=bottle.collector;
@@ -41,7 +41,7 @@ $('planFile').addEventListener('change',async e=>{
  try{
   if(file.size>1000000)throw Error('Arquivo de teste excede 1 MB.');
   const data=JSON.parse(await file.text());
-  if(data.formato!=='NASTEC-OS-PILOTO-06'||!Array.isArray(data.frascos)||!data.frascos.length||data.frascos.length>500)throw Error('Formato de OS de teste inválido.');
+  if(data.formato!=='NASTEC-OS-OFICIAL-01'||!Array.isArray(data.frascos)||!data.frascos.length||data.frascos.length>500)throw Error('Formato de OS de teste inválido.');
   const keys=['os_no','sample_code','bottle_code','bottle_type','point_name','collector'];
   const seen=new Set();
   for(const b of data.frascos){
@@ -56,8 +56,8 @@ $('planFile').addEventListener('change',async e=>{
   st.clear();
   data.frascos.forEach(b=>st.put(Object.fromEntries(keys.map(k=>[k,b[k].trim()]))));
   await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error);tx.onabort=()=>fail(tx.error)});
-  identifiedCode=null;await refreshPlans();setLookupMessage('OS fictícias importadas. Agora leia um QR Code de teste.');
-  alert('OS fictícias carregadas somente neste aparelho. Nenhum dado foi enviado ao LIMS.');
+  identifiedCode=null;await refreshPlans();setLookupMessage('OS oficiais importadas. Leia o QR Code do frasco.');
+  alert('OS oficiais carregadas no celular para uso offline.');
  }catch(err){alert('Não foi possível importar: '+err.message)}
  e.target.value='';
 });
@@ -90,7 +90,7 @@ function historyEntries(r){return (r.historico||[]).map(h=>{
  return `<article class="audit-entry"><div><strong>${esc(h.acao||'EVENTO')}</strong> <span class="muted">${esc(formatDate(h.em))}</span></div><div class="muted">Coletor: ${esc(h.usuario||r.coletor||'-')}</div>${reason?`<p><strong>Justificativa:</strong> ${esc(reason)}</p>`:''}${changes.length?`<div class="audit-changes">${changes.map(a=>`<div><strong>${esc(nomesCampos[a.campo]||a.campo)}:</strong> <span>Anterior: ${esc(a.anterior??'-')}</span> <span>Novo: ${esc(a.novo??'-')}</span></div>`).join('')}</div>`:''}${!reason&&!changes.length&&h.detalhe?`<p>${esc(h.detalhe)}</p>`:''}</article>`;
  }).join('')||'<p>Sem eventos registrados.</p>'}
 function updateStatus(rows){$('status').textContent=`${rows.length} registro(s) neste aparelho • ${navigator.onLine?'rede disponível':'sem rede'} • ${rows.filter(r=>r.situacao==='Finalizada — aguardando sincronização').length} aguardando sincronização`}
-async function render(){const rows=(await all()).sort((a,b)=>(b.criadoEm||'').localeCompare(a.criadoEm||''));updateStatus(rows);$('list').innerHTML=rows.length?rows.map(r=>`<div class="entry"><b>${esc(r.os)} • ${esc(r.amostra)}</b><p>${esc(r.frasco)} • ${esc(r.ponto)}<br><strong>${esc(r.situacao)}</strong> • ${esc(r.coletor)}<br>${esc(r.datahora)} • ${(r.fotos||[]).length} foto(s)</p><div>${(r.fotos||[]).map(p=>`<img class="photo" src="${p.data}" alt="Foto de teste">`).join('')}</div>${r.situacao==='Em andamento'?`<button data-action="editar" class="secondary" data-id="${r.id}">Editar coleta</button><button data-action="finalizar" data-id="${r.id}">Finalizar e assinar</button>`:`<button data-action="reabrir" class="secondary" data-id="${r.id}">Reabrir com justificativa</button>`}<button data-action="historico" class="secondary" data-id="${r.id}" aria-expanded="false">Ver histórico</button><button data-action="ficha" class="secondary" data-id="${r.id}">Ficha / PDF</button><div class="audit-panel hide" id="hist-${r.id}"><h4>Histórico e justificativas</h4>${historyEntries(r)}</div><button data-action="excluir" class="danger" data-id="${r.id}">Excluir teste</button><div id="sign-${r.id}" class="hide"><p>Assinatura de ${esc(r.coletor)} (desenhe com o dedo ou mouse):</p><canvas width="680" height="155" data-canvas="${r.id}"></canvas><button data-action="limpar" data-id="${r.id}" class="secondary">Limpar assinatura</button><button data-action="confirmar" data-id="${r.id}">Confirmar finalização</button></div></div>`).join(''):'Nenhum registro.'}
+async function render(){const rows=(await all()).sort((a,b)=>(b.criadoEm||'').localeCompare(a.criadoEm||''));updateStatus(rows);$('list').innerHTML=rows.length?rows.map(r=>`<div class="entry"><b>${esc(r.os)} • ${esc(r.amostra)}</b><p>${esc(r.frasco)} • ${esc(r.ponto)}<br><strong>${esc(r.situacao)}</strong> • ${esc(r.coletor)}<br>${esc(r.datahora)} • ${(r.fotos||[]).length} foto(s)</p><div>${(r.fotos||[]).map(p=>`<img class="photo" src="${p.data}" alt="Foto de coleta">`).join('')}</div>${r.situacao==='Em andamento'?`<button data-action="editar" class="secondary" data-id="${r.id}">Editar coleta</button><button data-action="finalizar" data-id="${r.id}">Finalizar e assinar</button>`:`<button data-action="reabrir" class="secondary" data-id="${r.id}">Reabrir com justificativa</button>`}<button data-action="historico" class="secondary" data-id="${r.id}" aria-expanded="false">Ver histórico</button><button data-action="ficha" class="secondary" data-id="${r.id}">Ficha / PDF</button><div class="audit-panel hide" id="hist-${r.id}"><h4>Histórico e justificativas</h4>${historyEntries(r)}</div><button data-action="excluir" class="danger" data-id="${r.id}">Excluir registro</button><div id="sign-${r.id}" class="hide"><p>Assinatura de ${esc(r.coletor)} (desenhe com o dedo ou mouse):</p><canvas width="680" height="155" data-canvas="${r.id}"></canvas><button data-action="limpar" data-id="${r.id}" class="secondary">Limpar assinatura</button><button data-action="confirmar" data-id="${r.id}">Confirmar finalização</button></div></div>`).join(''):'Nenhum registro.'}
 $('fotos').addEventListener('change',async e=>{try{const novas=await Promise.all([...e.target.files].map(readFile));photos.push(...novas);$('photosCount').textContent=`${photos.length} foto(s) no registro`}catch(err){alert('Erro ao carregar foto: '+err.message)}});
 $('cancelEdit').addEventListener('click',clearEdit);
 $('form').addEventListener('submit',async e=>{
@@ -100,7 +100,7 @@ $('form').addEventListener('submit',async e=>{
  if(!editId){
   const b=await plannedGet(f.frasco.trim());
   if(!b||['os','amostra','frasco','ponto'].some((k)=>f[k]!==({os:b.os_no,amostra:b.sample_code,frasco:b.bottle_code,ponto:b.point_name}[k]))||f.coletor!==b.collector){
-   alert('Identifique um frasco das OS fictícias importadas. Não é permitido salvar vínculos divergentes.');return
+   alert('Identifique um frasco das OS oficiais importadas. Não é permitido salvar vínculos divergentes.');return
   }
   if(rows.some(r=>r.frasco===f.frasco)){alert('Este frasco já possui uma coleta registrada neste aparelho. Abra o registro existente.');return}
  }
@@ -121,18 +121,18 @@ $('form').addEventListener('submit',async e=>{
    await put(r);clearEdit();await render();alert('Alterações salvas no aparelho. Histórico preservado.');
   }else{
    const r={...f,id:uid(),fotos:photos,criadoEm:new Date().toISOString(),situacao:'Em andamento',assinatura:null,historico:[]};
-   history(r,'CRIADA','Registro simulado');await put(r);clearEdit();await render();alert('Rascunho salvo no celular. Não foi enviado ao LIMS.');
+   history(r,'CRIADA','Registro de campo');await put(r);clearEdit();await render();alert('Rascunho salvo no celular. Não foi enviado ao LIMS.');
   }
  }catch(err){alert('Falha ao salvar (possível limite de armazenamento): '+err.message)}
 });
 function setupCanvas(canvas){const ctx=canvas.getContext('2d');ctx.lineWidth=2.5;ctx.strokeStyle='#122c43';ctx.lineCap='round';let active=false;const pos=e=>{const box=canvas.getBoundingClientRect();return {x:(e.clientX-box.left)*canvas.width/box.width,y:(e.clientY-box.top)*canvas.height/box.height}};canvas.onpointerdown=e=>{active=true;draw=true;canvas.setPointerCapture(e.pointerId);const p=pos(e);ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(p.x+.01,p.y+.01);ctx.stroke()};canvas.onpointermove=e=>{if(!active)return;const p=pos(e);ctx.lineTo(p.x,p.y);ctx.stroke()};canvas.onpointerup=canvas.onpointercancel=()=>active=false}
 $('list').addEventListener('click',async e=>{const b=e.target.closest('button[data-action]');if(!b)return;const {action,id}=b.dataset;const r=await get(id);if(!r)return;
 if(action==='editar'){showEdit(r);return}
-if(action==='excluir'){if(confirm('Excluir este registro simulado e todas as fotografias deste aparelho?')){await del(id);await render()}return}
+if(action==='excluir'){if(confirm('Excluir este registro e todas as fotografias deste aparelho?')){await del(id);await render()}return}
 if(action==='finalizar'){signId=id;draw=false;const div=$('sign-'+id);div.classList.remove('hide');setupCanvas(div.querySelector('canvas'));return}
 if(action==='limpar'){const c=$('sign-'+id).querySelector('canvas');c.getContext('2d').clearRect(0,0,c.width,c.height);draw=false;return}
-if(action==='confirmar'){if(signId!==id||!draw){alert('Assine antes de finalizar.');return}if(!confirm('Confirmar a finalização desta coleta simulada?'))return;const c=$('sign-'+id).querySelector('canvas');r.assinatura=c.toDataURL('image/png');r.situacao='Finalizada — aguardando sincronização';r.finalizadoEm=new Date().toISOString();history(r,'FINALIZADA','Assinatura do coletor registrada');await put(r);signId=null;await render();return}
-if(action==='reabrir'){const motivo=prompt('Informe a justificativa obrigatória para reabrir a coleta:');if(motivo===null)return;if(!motivo.trim()){alert('A justificativa é obrigatória.');return}history(r,'REABERTA',motivo.trim());r.situacao='Em andamento';r.assinaturasAnteriores??=[];if(r.assinatura)r.assinaturasAnteriores.push({imagem:r.assinatura,finalizadoEm:r.finalizadoEm});r.assinatura=null;r.finalizadoEm=null;await put(r);await render();showEdit(r);alert('Coleta reaberta. Edite os campos e informe a justificativa ao salvar.');return}
+if(action==='confirmar'){if(signId!==id||!draw){alert('Assine antes de finalizar.');return}if(!confirm('Confirmar a finalização desta coleta?'))return;const c=$('sign-'+id).querySelector('canvas');r.assinatura=c.toDataURL('image/png');r.situacao='Finalizada — aguardando sincronização';r.finalizadoEm=new Date().toISOString();history(r,'FINALIZADA','Assinatura do coletor registrada');await put(r);signId=null;await render();return}
+if(action==='reabrir'){if(r.situacao.startsWith('Sincronizada')){alert('Registro já recebido pelo LIMS. Solicite correção controlada no laboratório.');return}const motivo=prompt('Informe a justificativa obrigatória para reabrir a coleta:');if(motivo===null)return;if(!motivo.trim()){alert('A justificativa é obrigatória.');return}history(r,'REABERTA',motivo.trim());r.situacao='Em andamento';r.assinaturasAnteriores??=[];if(r.assinatura)r.assinaturasAnteriores.push({imagem:r.assinatura,finalizadoEm:r.finalizadoEm});r.assinatura=null;r.finalizadoEm=null;await put(r);await render();showEdit(r);alert('Coleta reaberta. Edite os campos e informe a justificativa ao salvar.');return}
 if(action==='historico'){const panel=$('hist-'+id);const visible=!panel.classList.toggle('hide');b.textContent=visible?'Ocultar histórico':'Ver histórico';b.setAttribute('aria-expanded',String(visible));return}
 if(action==='ficha'){makePrint(r);return}
 });
@@ -140,10 +140,10 @@ function makePrint(r){
  const fieldsPrint=[['OS',r.os],['Amostra',r.amostra],['Frasco',r.frasco],['Ponto',r.ponto],['Coletor',r.coletor],['Data/hora',r.datahora],['pH',r.ph],['Cloro residual (mg/L)',r.cloro],['Temperatura (°C)',r.temperatura],['Clima',r.clima],['Observações',r.observacoes],['Situação',r.situacao]];
  const fotos=(r.fotos||[]).map(p=>`<img src="${p.data}" alt="Foto da coleta">`).join('');
  const historico=historyEntries(r);
- $('printArea').innerHTML=`<div class="sheet"><h2>NASTEC — FICHA DE COLETA (SIMULAÇÃO)</h2><p><strong>DOCUMENTO DE TESTE — NÃO UTILIZAR EM ATENDIMENTO REAL</strong></p><table>${fieldsPrint.map(([k,v])=>`<tr><th>${esc(k)}</th><td>${esc(v||'-')}</td></tr>`).join('')}</table><div class="print-block"><h3>Fotografias</h3><div class="print-photos">${fotos||'<p>Sem fotografias</p>'}</div></div><div class="print-block"><h3>Assinatura do coletor</h3>${r.assinatura?`<img class="signature" src="${r.assinatura}" alt="Assinatura">`:'<p>Coleta não finalizada / sem assinatura atual</p>'}<div>${esc(r.coletor)} • ${esc(r.finalizadoEm||'')}</div></div><div class="print-history"><h3>Histórico de alterações</h3>${historico}</div></div>`;
+ $('printArea').innerHTML=`<div class="sheet"><h2>NASTEC — FICHA DE COLETA</h2><table>${fieldsPrint.map(([k,v])=>`<tr><th>${esc(k)}</th><td>${esc(v||'-')}</td></tr>`).join('')}</table><div class="print-block"><h3>Fotografias</h3><div class="print-photos">${fotos||'<p>Sem fotografias</p>'}</div></div><div class="print-block"><h3>Assinatura do coletor</h3>${r.assinatura?`<img class="signature" src="${r.assinatura}" alt="Assinatura">`:'<p>Coleta não finalizada / sem assinatura atual</p>'}<div>${esc(r.coletor)} • ${esc(r.finalizadoEm||'')}</div></div><div class="print-history"><h3>Histórico de alterações</h3>${historico}</div></div>`;
  window.print();
 }
-$('export').addEventListener('click',async()=>{const rows=await all();if(!rows.length){alert('Não há registros');return}const blob=new Blob([JSON.stringify({formato:'NASTEC-COLETAS-PILOTO-06',exportadoEm:new Date().toISOString(),registros:rows},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nastec-coletas-06-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)});
+$('export').addEventListener('click',async()=>{const rows=await all();if(!rows.length){alert('Não há registros');return}const blob=new Blob([JSON.stringify({formato:'NASTEC-COLETAS-OFICIAL-01',exportadoEm:new Date().toISOString(),registros:rows},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='nastec-coletas-oficial-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)});
 function stopCamera(){
  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
  const v=$('video');v.pause();v.srcObject=null;v.classList.add('hide');$('stopScan').classList.add('hide');
@@ -190,3 +190,18 @@ function installationStatus(){
 installationStatus();
 window.addEventListener('online',()=>db&&render());window.addEventListener('offline',()=>db&&render());
 (async()=>{try{db=await openDb();await render();await refreshPlans()}catch(e){$('status').textContent='Erro de armazenamento: '+e.message;$('form').querySelector('[type=submit]').disabled=true}if('serviceWorker'in navigator&&window.isSecureContext)navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(e=>{$('installStatus').textContent='Falha ao preparar modo offline: '+e.message})})();
+
+// Integração oficial: comunicação direta somente com endereço HTTPS acessível.
+const CONFIG_KEY='nastec-coletas-config-v1';
+function config(){try{return JSON.parse(localStorage.getItem(CONFIG_KEY)||'{}')}catch{return {}}}
+function saveConfig(){const url=$('serverUrl').value.trim().replace(/\/$/,'');const token=$('serverToken').value.trim();if(url&&!/^https:\/\//i.test(url)){alert('Informe endereço HTTPS. Não exponha o LIMS via HTTP público.');return}localStorage.setItem(CONFIG_KEY,JSON.stringify({url,token}));$('syncStatus').textContent='Configuração salva neste aparelho.'}
+$('saveConfig').addEventListener('click',saveConfig);
+const initial=config();$('serverUrl').value=initial.url||'';$('serverToken').value=initial.token||'';
+async function api(path,method='GET',payload){const {url,token}=config();if(!url||!token)throw Error('Configure endereço HTTPS e token. Alternativamente use os arquivos JSON.');const resp=await fetch(url+path,{method,headers:{'X-NASTEC-Token':token,...(payload?{'Content-Type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined,cache:'no-store'});const data=await resp.json();if(!resp.ok)throw Error(data.erro||'HTTP '+resp.status);return data}
+async function importPlans(data){if(data.formato!=='NASTEC-OS-OFICIAL-01'||!Array.isArray(data.frascos))throw Error('Formato inválido');const keys=['os_no','sample_code','bottle_code','bottle_type','point_name','collector'];const seen=new Set();for(const b of data.frascos){if(keys.some(k=>typeof b[k]!=='string'||!b[k].trim())||seen.has(b.bottle_code))throw Error('Dados de frascos inválidos ou duplicados');seen.add(b.bottle_code)}const tx=db.transaction('frascosPlanejados','readwrite');const st=tx.objectStore('frascosPlanejados');st.clear();data.frascos.forEach(b=>st.put(Object.fromEntries(keys.map(k=>[k,b[k]]))));await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error)});await refreshPlans()}
+$('downloadPlans').addEventListener('click',async()=>{try{await importPlans(await api('/api/coletas/planos'));$('syncStatus').textContent='OS oficiais atualizadas.'}catch(e){$('syncStatus').textContent='Falha: '+e.message}});
+let syncing=false;
+async function sync(){if(syncing||!db||!navigator.onLine)return;const {url,token}=config();if(!url||!token)return;syncing=true;try{const pending=(await all()).filter(r=>r.situacao==='Finalizada — aguardando sincronização');if(!pending.length){$('syncStatus').textContent='Nenhuma coleta pendente.';return}for(let i=0;i<pending.length;i+=10){const result=await api('/api/coletas/registros','POST',{registros:pending.slice(i,i+10)});for(const id of result.recebidos||[]){const r=await get(id);if(r&&r.situacao==='Finalizada — aguardando sincronização'){r.situacao='Sincronizada — aguardando conferência';r.sincronizadoEm=new Date().toISOString();history(r,'SINCRONIZADA','Recebimento confirmado pelo LIMS');await put(r)}}if(result.erros?.length)throw Error(result.erros.join('; '))}await render();$('syncStatus').textContent='Registros recebidos pelo LIMS.'}catch(e){$('syncStatus').textContent='Sincronização pendente: '+e.message}finally{syncing=false}}
+$('syncNow').addEventListener('click',sync);
+window.addEventListener('online',()=>{sync()});
+setInterval(()=>{if(navigator.onLine)sync()},60000);
