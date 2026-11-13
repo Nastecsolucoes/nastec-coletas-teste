@@ -22,10 +22,24 @@ async function identifyBottle(code){
  if(!code){setLookupMessage('Leia um QR Code ou informe o código do frasco.');return false}
  const bottle=await plannedGet(code);
  if(!bottle){setLookupMessage('Frasco não encontrado nas OS oficiais carregadas. Atualize as OS antes de coletar.');return false}
- if(!['Jóice Fuhrmann','Alessandro Tinel'].includes(bottle.collector)){setLookupMessage('OS importada para consulta. Coletor original: '+bottle.collector+'. Para realizar a coleta pela equipe NASTEC, atribua corretamente o responsável no LIMS e reimporte as OS.');return false}
- const selected=$('form').elements.coletor.value;
- if(selected&&selected!==bottle.collector){setLookupMessage('Frasco atribuído a outro coletor: '+bottle.collector+'. Selecione o coletor correto.');return false}
- $('form').elements.coletor.value=bottle.collector;
+  const allowedCollectors=['Jóice Fuhrmann','Alessandro Tinel'];
+  const selected=$('form').elements.coletor.value;
+  if(!bottle.collector){
+   if(!allowedCollectors.includes(selected)){setLookupMessage('Esta OS está sem coletador. Selecione Jóice Fuhrmann ou Alessandro Tinel antes de identificar o frasco.');return false}
+   // Atribuição local da OS inteira: todos os frascos devem ter o mesmo responsável.
+   const sameOs=(await plannedAll()).filter(b=>b.os_no===bottle.os_no);
+   const assigned=sameOs.find(b=>b.collector&&b.collector!==selected);
+   if(assigned){setLookupMessage('Esta OS já está atribuída a '+assigned.collector+'. Selecione o coletor correto.');return false}
+   const tx=db.transaction('frascosPlanejados','readwrite');
+   const st=tx.objectStore('frascosPlanejados');
+   for(const b of sameOs){if(!b.collector){b.collector=selected;st.put(b)}}
+   await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error);tx.onabort=()=>fail(tx.error)});
+   bottle.collector=selected;
+   await refreshPlans();
+  }
+  if(!allowedCollectors.includes(bottle.collector)){setLookupMessage('OS importada para consulta. Coletor original: '+bottle.collector+'. Para realizar a coleta pela equipe NASTEC, atribua corretamente o responsável no LIMS.');return false}
+  if(selected&&selected!==bottle.collector){setLookupMessage('Frasco atribuído a outro coletor: '+bottle.collector+'. Selecione o coletor correto.');return false}
+  $('form').elements.coletor.value=bottle.collector;
  for(const [key,val] of [['os',bottle.os_no],['amostra',bottle.sample_code],['ponto',bottle.point_name],['frasco',bottle.bottle_code]])$('form').elements[key].value=val;
  identifiedCode=code;
  setLookupMessage('Identificado: '+bottle.os_no+' • '+bottle.sample_code+' • '+bottle.bottle_type+' • '+bottle.point_name+' • '+bottle.collector,true);
@@ -45,7 +59,7 @@ $('planFile').addEventListener('change',async e=>{
   if(file.size>1000000)throw Error('Arquivo de OS excede 1 MB.');
   const data=JSON.parse(await file.text());
   if(data.formato!=='NASTEC-OS-OFICIAL-01'||!Array.isArray(data.frascos)||!data.frascos.length||data.frascos.length>500)throw Error('Formato de OS inválido.');
-  const keys=['os_no','sample_code','bottle_code','bottle_type','point_name','collector'];
+  const keys=['os_no','sample_code','bottle_code','bottle_type','point_name'];
   const seen=new Set();
   for(const b of data.frascos){
    if(!b||keys.some(k=>typeof b[k]!=='string'||!b[k].trim()||b[k].length>200))throw Error('Frasco com campos ausentes ou inválidos.');
@@ -56,7 +70,7 @@ $('planFile').addEventListener('change',async e=>{
   const st=tx.objectStore('frascosPlanejados');
   // Substitui apenas o catálogo de OS; preserva coletas e rascunhos locais.
   st.clear();
-  data.frascos.forEach(b=>st.put(Object.fromEntries(keys.map(k=>[k,b[k].trim()]))));
+  data.frascos.forEach(b=>st.put({...Object.fromEntries(keys.map(k=>[k,b[k].trim()])),collector:typeof b.collector==='string'?b.collector.trim():''}));
   await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error);tx.onabort=()=>fail(tx.error)});
   identifiedCode=null;await refreshPlans();setLookupMessage('OS oficiais importadas. Leia o QR Code do frasco.');
   alert('OS oficiais carregadas no celular para uso offline.');
@@ -229,7 +243,7 @@ function saveConfig(){const url=$('serverUrl').value.trim().replace(/\/$/,'');co
 $('saveConfig').addEventListener('click',saveConfig);
 const initial=config();$('serverUrl').value=initial.url||'';$('serverToken').value=initial.token||'';
 async function api(path,method='GET',payload){const {url,token}=config();if(!url||!token)throw Error('Configure endereço HTTPS e token. Alternativamente use os arquivos JSON.');const resp=await fetch(url+path,{method,headers:{'X-NASTEC-Token':token,...(payload?{'Content-Type':'application/json'}:{})},body:payload?JSON.stringify(payload):undefined,cache:'no-store'});const data=await resp.json();if(!resp.ok)throw Error(data.erro||'HTTP '+resp.status);return data}
-async function importPlans(data){if(data.formato!=='NASTEC-OS-OFICIAL-01'||!Array.isArray(data.frascos)||!data.frascos.length||data.frascos.length>500)throw Error('Formato inválido');const keys=['os_no','sample_code','bottle_code','bottle_type','point_name','collector'];const seen=new Set();for(const b of data.frascos){if(!b||keys.some(k=>typeof b[k]!=='string'||!b[k].trim()||b[k].length>200)||seen.has(b.bottle_code))throw Error('Dados de frascos inválidos ou duplicados');seen.add(b.bottle_code)}const tx=db.transaction('frascosPlanejados','readwrite');const st=tx.objectStore('frascosPlanejados');st.clear();data.frascos.forEach(b=>st.put(Object.fromEntries(keys.map(k=>[k,b[k]]))));await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error)});await refreshPlans()}
+async function importPlans(data){if(data.formato!=='NASTEC-OS-OFICIAL-01'||!Array.isArray(data.frascos)||!data.frascos.length||data.frascos.length>500)throw Error('Formato inválido');const keys=['os_no','sample_code','bottle_code','bottle_type','point_name'];const seen=new Set();for(const b of data.frascos){if(!b||keys.some(k=>typeof b[k]!=='string'||!b[k].trim()||b[k].length>200)||seen.has(b.bottle_code))throw Error('Dados de frascos inválidos ou duplicados');seen.add(b.bottle_code)}const tx=db.transaction('frascosPlanejados','readwrite');const st=tx.objectStore('frascosPlanejados');st.clear();data.frascos.forEach(b=>st.put({...Object.fromEntries(keys.map(k=>[k,b[k].trim()])),collector:typeof b.collector==='string'?b.collector.trim():''}));await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error)});await refreshPlans()}
 $('downloadPlans').addEventListener('click',async()=>{try{await importPlans(await api('/api/coletas/planos'));$('syncStatus').textContent='OS oficiais atualizadas.'}catch(e){$('syncStatus').textContent='Falha: '+e.message}});
 let syncing=false;
 async function sync(){if(syncing||!db||!navigator.onLine)return;const {url,token}=config();if(!url||!token)return;syncing=true;try{const pending=(await all()).filter(r=>r.situacao==='Finalizada — aguardando sincronização');if(!pending.length){$('syncStatus').textContent='Nenhuma coleta pendente.';return}for(let i=0;i<pending.length;i+=10){const result=await api('/api/coletas/registros','POST',{registros:pending.slice(i,i+10)});for(const id of result.recebidos||[]){const r=await get(id);if(r&&r.situacao==='Finalizada — aguardando sincronização'){r.situacao='Sincronizada — aguardando conferência';r.sincronizadoEm=new Date().toISOString();history(r,'SINCRONIZADA','Recebimento confirmado pelo LIMS');await put(r)}}if(result.erros?.length)throw Error(result.erros.join('; '))}await render();$('syncStatus').textContent='Registros recebidos pelo LIMS.'}catch(e){$('syncStatus').textContent='Sincronização pendente: '+e.message}finally{syncing=false}}
