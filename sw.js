@@ -1,9 +1,28 @@
-const CACHE='nastec-coletas-oficial-07-static-v1';
-const ATIVOS=['./','./index.html','./app.js','./manifesto.webmanifest','./ícone.svg','./os-fichas-06.json'];
-self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));
-self.addEventListener('activate',e=>e.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))),self.clients.claim()])));
-self.addEventListener('fetch',e=>{
- const req=e.request;
- if(req.method!=='GET'||new URL(req.url).origin!==self.location.origin)return;
- e.respondWith(caches.match(req).then(cached=>cached||fetch(req)));
+// NASTEC Coletas - correcao do cache offline; sem alteracao de dados locais.
+const CACHE = 'nastec-coletas-offline-20261113-v1';
+const ASSETS = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
+self.addEventListener('install', event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(key => key.startsWith('nastec-coletas-') && key !== CACHE).map(key => caches.delete(key)));
+    await self.clients.claim();
+  })());
+});
+self.addEventListener('fetch', event => {
+  const req = event.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  event.respondWith((async () => {
+    const cached = await caches.match(req);
+    if (cached) return cached;
+    try { return await fetch(req); } catch (error) {
+      if (req.mode === 'navigate') {
+        const page = await caches.match('./index.html');
+        if (page) return page;
+      }
+      throw error;
+    }
+  })());
 });
