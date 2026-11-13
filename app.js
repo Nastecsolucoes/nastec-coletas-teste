@@ -3,10 +3,11 @@ const $=id=>document.getElementById(id);let db,photos=[],stream=null,signId=null
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>globalThis.crypto?.randomUUID?.()||String(Date.now())+'-'+Math.random().toString(36).slice(2);
 function request(r){return new Promise((ok,fail)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>fail(r.error)})}
-function openDb(){return new Promise((ok,fail)=>{const r=indexedDB.open('nastec-coletas-piloto-04',2);r.onupgradeneeded=()=>{
+function openDb(){return new Promise((ok,fail)=>{const r=indexedDB.open('nastec-coletas-piloto-04',3);r.onupgradeneeded=()=>{
  const d=r.result;
  if(!d.objectStoreNames.contains('registros'))d.createObjectStore('registros',{keyPath:'id'});
  if(!d.objectStoreNames.contains('frascosPlanejados'))d.createObjectStore('frascosPlanejados',{keyPath:'bottle_code'});
+ if(!d.objectStoreNames.contains('rascunhosFormulario'))d.createObjectStore('rascunhosFormulario',{keyPath:'id'});
 };r.onsuccess=()=>ok(r.result);r.onerror=()=>fail(r.error)})}
 const store=(mode='readonly')=>db.transaction('registros',mode).objectStore('registros');
 const all=()=>request(store().getAll());const get=id=>request(store().get(id));const put=r=>request(store('readwrite').put(r));const del=id=>request(store('readwrite').delete(id));
@@ -27,6 +28,7 @@ async function identifyBottle(code){
  for(const [key,val] of [['os',bottle.os_no],['amostra',bottle.sample_code],['ponto',bottle.point_name],['frasco',bottle.bottle_code]])$('form').elements[key].value=val;
  identifiedCode=code;
  setLookupMessage('Identificado: '+bottle.os_no+' • '+bottle.sample_code+' • '+bottle.bottle_type+' • '+bottle.point_name+' • '+bottle.collector,true);
+ scheduleDraft();
  return true
 }
 async function refreshPlans(){
@@ -66,6 +68,35 @@ $('frasco').addEventListener('input',()=>{identifiedCode=null;setLookupMessage('
 const readFile=f=>new Promise((ok,fail)=>{const r=new FileReader();r.onload=()=>ok({name:f.name,type:f.type,data:r.result});r.onerror=()=>fail(r.error);r.readAsDataURL(f)});
 function history(r,action,detail=''){r.historico??=[];r.historico.push({acao:action,detalhe:detail,em:new Date().toISOString(),usuario:r.coletor})}
 const fields=['coletor','os','amostra','frasco','ponto','datahora','ph','cloro','temperatura','clima','observacoes'];
+// Rascunho automático separado de registros oficiais; não é enviado ao LIMS.
+const FORM_DRAFT_ID='coleta-em-preenchimento';
+let draftTimer=null,restoringDraft=false;
+const draftStore=(mode='readonly')=>db.transaction('rascunhosFormulario',mode).objectStore('rascunhosFormulario');
+async function saveFormDraft(){
+ if(!db||restoringDraft||editId)return;
+ const f=Object.fromEntries(new FormData($('form')));
+ const values=Object.fromEntries(fields.map(k=>[k,String(f[k]||'')]));
+ const hasContent=Object.values(values).some(v=>v.trim())||photos.length>0;
+ if(!hasContent)return;
+ try{await request(draftStore('readwrite').put({id:FORM_DRAFT_ID,values,fotos:photos,updatedAt:new Date().toISOString()}));}
+ catch(e){console.error('NASTEC: falha ao guardar rascunho',e);$('lookupStatus').textContent='Atenção: não foi possível guardar o rascunho neste aparelho.';}
+}
+function scheduleDraft(){if(restoringDraft||editId)return;clearTimeout(draftTimer);draftTimer=setTimeout(()=>{saveFormDraft()},300)}
+async function discardFormDraft(){clearTimeout(draftTimer);if(db)await request(draftStore('readwrite').delete(FORM_DRAFT_ID))}
+async function restoreFormDraft(){
+ const draft=await request(draftStore().get(FORM_DRAFT_ID));if(!draft)return;
+ restoringDraft=true;
+ try{for(const key of fields){const el=$('form').elements[key];if(el&&draft.values&&draft.values[key]!==undefined)el.value=draft.values[key]}
+ photos=Array.isArray(draft.fotos)?draft.fotos:[];
+ $('photosCount').textContent=photos.length+' foto(s) recuperada(s) do rascunho.';
+ setLookupMessage('Rascunho offline recuperado. Identifique o frasco oficial antes de salvar a coleta.');
+ }finally{restoringDraft=false}
+}
+$('form').addEventListener('input',scheduleDraft);
+$('form').addEventListener('change',scheduleDraft);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')saveFormDraft()});
+window.addEventListener('pagehide',()=>{saveFormDraft()});
+
 function showEdit(r){
  editId=r.id;
  for(const key of fields){const el=document.querySelector(`[name="${key}"]`);if(el)el.value=r[key]||''}
@@ -91,7 +122,7 @@ function historyEntries(r){return (r.historico||[]).map(h=>{
  }).join('')||'<p>Sem eventos registrados.</p>'}
 function updateStatus(rows){$('status').textContent=`${rows.length} registro(s) neste aparelho • ${navigator.onLine?'rede disponível':'sem rede'} • ${rows.filter(r=>r.situacao==='Finalizada — aguardando sincronização').length} aguardando sincronização`}
 async function render(){const rows=(await all()).sort((a,b)=>(b.criadoEm||'').localeCompare(a.criadoEm||''));updateStatus(rows);$('list').innerHTML=rows.length?rows.map(r=>`<div class="entry"><b>${esc(r.os)} • ${esc(r.amostra)}</b><p>${esc(r.frasco)} • ${esc(r.ponto)}<br><strong>${esc(r.situacao)}</strong> • ${esc(r.coletor)}<br>${esc(r.datahora)} • ${(r.fotos||[]).length} foto(s)</p><div>${(r.fotos||[]).map(p=>`<img class="photo" src="${p.data}" alt="Foto de coleta">`).join('')}</div>${r.situacao==='Em andamento'?`<button data-action="editar" class="secondary" data-id="${r.id}">Editar coleta</button><button data-action="finalizar" data-id="${r.id}">Finalizar e assinar</button>`:`<button data-action="reabrir" class="secondary" data-id="${r.id}">Reabrir com justificativa</button>`}<button data-action="historico" class="secondary" data-id="${r.id}" aria-expanded="false">Ver histórico</button><button data-action="ficha" class="secondary" data-id="${r.id}">Ficha / PDF</button><div class="audit-panel hide" id="hist-${r.id}"><h4>Histórico e justificativas</h4>${historyEntries(r)}</div><button data-action="excluir" class="danger" data-id="${r.id}">Excluir registro</button><div id="sign-${r.id}" class="hide"><p>Assinatura de ${esc(r.coletor)} (desenhe com o dedo ou mouse):</p><canvas width="680" height="155" data-canvas="${r.id}"></canvas><button data-action="limpar" data-id="${r.id}" class="secondary">Limpar assinatura</button><button data-action="confirmar" data-id="${r.id}">Confirmar finalização</button></div></div>`).join(''):'Nenhum registro.'}
-$('fotos').addEventListener('change',async e=>{try{const novas=await Promise.all([...e.target.files].map(readFile));photos.push(...novas);$('photosCount').textContent=`${photos.length} foto(s) no registro`}catch(err){alert('Erro ao carregar foto: '+err.message)}});
+$('fotos').addEventListener('change',async e=>{try{const novas=await Promise.all([...e.target.files].map(readFile));photos.push(...novas);$('photosCount').textContent=`${photos.length} foto(s) no registro`;scheduleDraft()}catch(err){alert('Erro ao carregar foto: '+err.message)}});
 $('cancelEdit').addEventListener('click',clearEdit);
 $('form').addEventListener('submit',async e=>{
  e.preventDefault();
@@ -118,10 +149,10 @@ $('form').addEventListener('submit',async e=>{
    if(!motivo.trim()){alert('Informe a justificativa.');return}
    Object.assign(r,f);r.fotos=photos;r.alteradoEm=new Date().toISOString();
    history(r,'EDITADA',JSON.stringify({justificativa:motivo.trim(),alteracoes}));
-   await put(r);clearEdit();await render();alert('Alterações salvas no aparelho. Histórico preservado.');
+   await put(r);await discardFormDraft();clearEdit();await render();alert('Alterações salvas no aparelho. Histórico preservado.');
   }else{
    const r={...f,id:uid(),fotos:photos,criadoEm:new Date().toISOString(),situacao:'Em andamento',assinatura:null,historico:[]};
-   history(r,'CRIADA','Registro de campo');await put(r);clearEdit();await render();alert('Rascunho salvo no celular. Não foi enviado ao LIMS.');
+   history(r,'CRIADA','Registro de campo');await put(r);await discardFormDraft();clearEdit();await render();alert('Rascunho salvo no celular. Não foi enviado ao LIMS.');
   }
  }catch(err){alert('Falha ao salvar (possível limite de armazenamento): '+err.message)}
 });
@@ -189,7 +220,7 @@ function installationStatus(){
 }
 installationStatus();
 window.addEventListener('online',()=>db&&render());window.addEventListener('offline',()=>db&&render());
-(async()=>{try{db=await openDb();await render();await refreshPlans()}catch(e){$('status').textContent='Erro de armazenamento: '+e.message;$('form').querySelector('[type=submit]').disabled=true}if('serviceWorker'in navigator&&window.isSecureContext)navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(e=>{$('installStatus').textContent='Falha ao preparar modo offline: '+e.message})})();
+(async()=>{try{db=await openDb();await render();await refreshPlans();await restoreFormDraft()}catch(e){$('status').textContent='Erro de armazenamento: '+e.message;$('form').querySelector('[type=submit]').disabled=true}if('serviceWorker'in navigator&&window.isSecureContext)navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(e=>{$('installStatus').textContent='Falha ao preparar modo offline: '+e.message})})();
 
 // Integração oficial: comunicação direta somente com endereço HTTPS acessível.
 const CONFIG_KEY='nastec-coletas-config-v1';
