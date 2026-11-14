@@ -79,7 +79,31 @@ $('planFile').addEventListener('change',async e=>{
 });
 $('lookupBtn').addEventListener('click',()=>identifyBottle($('frasco').value));
 $('frasco').addEventListener('input',()=>{identifiedCode=null;setLookupMessage('Código alterado. Clique em Identificar frasco para conferir.')});
-const readFile=f=>new Promise((ok,fail)=>{const r=new FileReader();r.onload=()=>ok({name:f.name,type:f.type,data:r.result});r.onerror=()=>fail(r.error);r.readAsDataURL(f)});
+// Fotografias compactadas para evitar rejeição por tamanho na API.
+// Mantém os dados antigos no IndexedDB até o LIMS confirmar o recebimento.
+async function compressPhoto(photo){
+ if(!photo?.data || !/^data:image\//i.test(photo.data))return photo;
+ const img=new Image();
+ await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=()=>reject(Error('Não foi possível ler a fotografia'));img.src=photo.data});
+ let w=img.naturalWidth,h=img.naturalHeight;
+ if(!w||!h)throw Error('Fotografia inválida');
+ const maxSide=960, scale=Math.min(1,maxSide/Math.max(w,h));
+ w=Math.max(1,Math.round(w*scale));h=Math.max(1,Math.round(h*scale));
+ const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+ canvas.getContext('2d').drawImage(img,0,0,w,h);
+ let data=canvas.toDataURL('image/jpeg',0.7);
+ // Limite conservador por foto (~120 KB em Base64), para integração móvel.
+ for(let i=0;i<5&&data.length>160000;i++){
+  const factor=Math.sqrt(160000/data.length)*0.92;
+  w=Math.max(320,Math.round(w*factor));h=Math.max(240,Math.round(h*factor));
+  canvas.width=w;canvas.height=h;canvas.getContext('2d').drawImage(img,0,0,w,h);
+  data=canvas.toDataURL('image/jpeg',0.65);
+  if(w<=320||h<=240)break;
+ }
+ if(data.length>230000)throw Error('Fotografia excede o limite mesmo após compactação');
+ return {...photo,type:'image/jpeg',name:(photo.name||'foto').replace(/\.[^.]+$/,'')+'.jpg',data};
+}
+const readFile=f=>new Promise((ok,fail)=>{const r=new FileReader();r.onload=async()=>{try{ok(await compressPhoto({name:f.name,type:f.type,data:r.result}))}catch(e){fail(e)}};r.onerror=()=>fail(r.error);r.readAsDataURL(f)});
 function history(r,action,detail=''){r.historico??=[];r.historico.push({acao:action,detalhe:detail,em:new Date().toISOString(),usuario:r.coletor})}
 const fields=['coletor','os','amostra','frasco','ponto','datahora','ph','cloro','temperatura','clima','observacoes'];
 // Rascunho automático separado de registros oficiais; não é enviado ao LIMS.
@@ -246,7 +270,14 @@ async function api(path,method='GET',payload){const {url,token}=config();if(!url
 async function importPlans(data){if(data.formato!=='NASTEC-OS-OFICIAL-01'||!Array.isArray(data.frascos)||!data.frascos.length||data.frascos.length>500)throw Error('Formato inválido');const keys=['os_no','sample_code','bottle_code','bottle_type','point_name'];const seen=new Set();for(const b of data.frascos){if(!b||keys.some(k=>typeof b[k]!=='string'||!b[k].trim()||b[k].length>200)||seen.has(b.bottle_code))throw Error('Dados de frascos inválidos ou duplicados');seen.add(b.bottle_code)}const tx=db.transaction('frascosPlanejados','readwrite');const st=tx.objectStore('frascosPlanejados');st.clear();data.frascos.forEach(b=>st.put({...Object.fromEntries(keys.map(k=>[k,b[k].trim()])),collector:typeof b.collector==='string'?b.collector.trim():''}));await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onerror=()=>fail(tx.error)});await refreshPlans()}
 $('downloadPlans').addEventListener('click',async()=>{try{await importPlans(await api('/api/coletas/planos'));$('syncStatus').textContent='OS oficiais atualizadas.'}catch(e){$('syncStatus').textContent='Falha: '+e.message}});
 let syncing=false;
-async function sync(){if(syncing||!db||!navigator.onLine)return;const {url,token}=config();if(!url||!token)return;syncing=true;try{const pending=(await all()).filter(r=>r.situacao==='Finalizada — aguardando sincronização');if(!pending.length){$('syncStatus').textContent='Nenhuma coleta pendente.';return}for(let i=0;i<pending.length;i+=10){const result=await api('/api/coletas/registros','POST',{registros:pending.slice(i,i+10)});for(const id of result.recebidos||[]){const r=await get(id);if(r&&r.situacao==='Finalizada — aguardando sincronização'){r.situacao='Sincronizada — aguardando conferência';r.sincronizadoEm=new Date().toISOString();history(r,'SINCRONIZADA','Recebimento confirmado pelo LIMS');await put(r)}}if(result.erros?.length)throw Error(result.erros.join('; '))}await render();$('syncStatus').textContent='Registros recebidos pelo LIMS.'}catch(e){$('syncStatus').textContent='Sincronização pendente: '+e.message}finally{syncing=false}}
+async function sync(){if(syncing||!db||!navigator.onLine)return;const {url,token}=config();if(!url||!token)return;syncing=true;try{const pending=(await all()).filter(r=>r.situacao==='Finalizada — aguardando sincronização');if(!pending.length){$('syncStatus').textContent='Nenhuma coleta pendente.';return}for(let i=0;i<pending.length;i+=10){// Compacta também fotografias de registros já finalizados, sem alterar o original local.
+ const batch=[];
+ for(const record of pending.slice(i,i+10)){
+  const fotos=[];
+  for(const foto of record.fotos||[])fotos.push(await compressPhoto(foto));
+  batch.push({...record,fotos});
+ }
+ const result=await api('/api/coletas/registros','POST',{registros:batch});for(const id of result.recebidos||[]){const r=await get(id);if(r&&r.situacao==='Finalizada — aguardando sincronização'){r.situacao='Sincronizada — aguardando conferência';r.sincronizadoEm=new Date().toISOString();history(r,'SINCRONIZADA','Recebimento confirmado pelo LIMS');await put(r)}}if(result.erros?.length)throw Error(result.erros.join('; '))}await render();$('syncStatus').textContent='Registros recebidos pelo LIMS.'}catch(e){$('syncStatus').textContent='Sincronização pendente: '+e.message}finally{syncing=false}}
 $('syncNow').addEventListener('click',sync);
 window.addEventListener('online',()=>{sync()});
 setInterval(()=>{if(navigator.onLine)sync()},60000);
